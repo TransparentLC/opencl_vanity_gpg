@@ -9,21 +9,25 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os:
           - windows-latest
           - ubuntu-latest
           - macos-latest
+
+    runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+
       - uses: Swatinem/rust-cache@v2
       - name: Prepare OpenCL SDK
         shell: bash
+        id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -36,6 +40,8 @@ jobs:
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             sudo apt install opencl-headers ocl-icd-opencl-dev
           fi
+          echo "rust_arch=$(rustc -vV | grep 'host: ' | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
+
       - name: Build
         id: build
         shell: bash
@@ -51,8 +57,9 @@ jobs:
           else
             echo "executable=target/release/opencl_vanity_gpg" >> $GITHUB_OUTPUT
           fi
+
       - name: Upload result
         uses: actions/upload-artifact@v4
         with:
-          name: opencl_vanity_gpg-${{ runner.os }}
+          name: opencl_vanity_gpg-${{ steps.prepare.outputs.rust_arch }}
           path: ${{ steps.build.outputs.executable }}
