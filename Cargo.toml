@@ -3,6 +3,13 @@ name = "opencl_vanity_gpg"
 version = "0.1.0"
 edition = "2021"
 
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+panic = "abort"
+strip = true
+
 [dependencies]
 byteorder = "1.5"
 chrono = { version = "0.4", default-features = false, features = ["now"] }
