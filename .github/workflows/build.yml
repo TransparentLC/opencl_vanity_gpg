@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+  pull_request:
 
 jobs:
   build:
@@ -14,12 +15,12 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
-          # - macos-latest
+          - macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly
+          toolchain: stable
       - uses: Swatinem/rust-cache@v2
       - name: Prepare OpenCL SDK
         shell: bash
@@ -35,10 +36,6 @@ jobs:
           if [[ "$RUNNER_OS" == "Linux" ]]; then
             sudo apt install opencl-headers ocl-icd-opencl-dev
           fi
-          # FIXME
-          # if [[ "$RUNNER_OS" == "macOS" ]]; then
-          #
-          # fi
       - name: Build
         id: build
         shell: bash
