@@ -4,11 +4,19 @@ use log::{debug, info, warn};
 use ocl::{Buffer, Device, Platform, ProQue};
 use pgp::types::PublicKeyTrait;
 use rand::thread_rng;
-use std::{fmt::Write, fs, path::Path, str::FromStr, sync::mpsc::*, thread, time::Instant};
+use std::{
+    fmt::Write,
+    fs,
+    path::Path,
+    str::FromStr,
+    sync::{mpsc::*, LazyLock},
+    thread,
+    time::Instant,
+};
+use utils::ARGS;
 use utils::*;
 
 mod utils;
-pub use utils::ARGS;
 
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(
@@ -17,7 +25,7 @@ fn main() -> anyhow::Result<()> {
     .format_indent(None)
     .init();
 
-    debug!("{:?}", &ARGS);
+    debug!("{:#?}", LazyLock::force(&ARGS));
 
     let device_list = utils::DeviceList::new()?;
 
