@@ -62,13 +62,15 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    let pattern = match &ARGS.pattern {
+        Some(pattern) => Some(HashPattern::from_str(pattern)?),
+        None => None,
+    };
+
     let (filter, estimate) = match &ARGS.filter {
         Some(filter) => (filter.clone(), None),
-        None => match &ARGS.pattern {
-            Some(pattern) => {
-                let hash_pattern = HashPattern::from_str(pattern)?;
-                (hash_pattern.filter, Some(hash_pattern.possibliity))
-            }
+        None => match &pattern {
+            Some(p) => (p.filter.clone(), Some(p.possibliity)),
             None => bail!("No filter or pattern given"),
         },
     };
@@ -89,7 +91,7 @@ fn main() -> anyhow::Result<()> {
     let (tx_hashdata, rx_hashdata) = channel::<Vec<u32>>();
     let (tx_result, rx_result) = channel::<Option<u32>>();
 
-    let mut hashed: usize = 0;
+    let mut hashed = 0;
     let mut start = Instant::now();
 
     let pro_que = ProQue::builder()
@@ -126,48 +128,55 @@ fn main() -> anyhow::Result<()> {
 
         debug!("Receive result from OpenCL thread");
         let vanity_timestamp = rx_result.recv()?;
-        hashed += dimension * iteration;
+        hashed += bench_size;
 
         let elapsed = start.elapsed().as_secs_f64();
         bar.inc(bench_size);
 
         if let Some(vanity_timestamp) = vanity_timestamp {
             vanity_key.edit_timestamp(vanity_timestamp, &mut rng);
-            vanity_key.log_state();
 
-            match estimate {
-                Some(estimate) => info!(
-                    "Hashed: {} ({:.02}x) Time: {:.02}s Speed: {} hash/s",
-                    format_number(hashed as f64),
-                    (hashed as f64) / estimate,
-                    elapsed,
-                    format_number((hashed as f64) / elapsed),
-                ),
-                None => info!(
-                    "Hashed: {} Time: {:.02}s Speed: {} hash/s",
-                    format_number(hashed as f64),
-                    elapsed,
-                    format_number((hashed as f64) / elapsed),
-                ),
+            if match &pattern {
+                Some(pattern) => vanity_key.check_pattern(pattern),
+                None => true,
+            } {
+                vanity_key.log_state();
+
+                match estimate {
+                    Some(estimate) => info!(
+                        "Hashed: {} ({:.02}x) Time: {:.02}s Speed: {} hash/s",
+                        format_number(hashed as f64),
+                        (hashed as f64) / estimate,
+                        elapsed,
+                        format_number((hashed as f64) / elapsed),
+                    ),
+                    None => info!(
+                        "Hashed: {} Time: {:.02}s Speed: {} hash/s",
+                        format_number(hashed as f64),
+                        elapsed,
+                        format_number((hashed as f64) / elapsed),
+                    ),
+                }
+
+                if let Some(ref output_dir) = ARGS.output {
+                    fs::write(
+                        Path::new(output_dir).join(format!(
+                            "{}-sec.asc",
+                            hex::encode_upper(vanity_key.secret_key.fingerprint().as_bytes())
+                        )),
+                        vanity_key.to_armored_string()?,
+                    )
+                    .unwrap();
+                }
+
+                if ARGS.oneshot {
+                    break;
+                }
+
+                hashed = 0;
+                bar.reset();
+                start = Instant::now();
             }
-
-            if let Some(ref output_dir) = ARGS.output {
-                fs::write(
-                    Path::new(output_dir).join(format!(
-                        "{}-sec.asc",
-                        hex::encode_upper(vanity_key.secret_key.fingerprint().as_bytes())
-                    )),
-                    vanity_key.to_armored_string()?,
-                )
-                .unwrap();
-            }
-
-            if ARGS.oneshot {
-                break;
-            }
-
-            hashed = 0;
-            start = Instant::now();
         }
 
         if let Some(timeout) = ARGS.timeout {
@@ -215,6 +224,7 @@ fn opencl_thread(
         }
 
         buffer_result.read(&mut vec).enq().unwrap();
+
         tx_result
             .send(match vec[0] {
                 0 => None,

@@ -4,18 +4,40 @@ use anyhow::bail;
 
 #[derive(Debug, Clone)]
 pub struct HashPattern {
+    pub pattern: String,
     pub filter: String,
     pub possibliity: f64,
+}
+
+impl HashPattern {
+    pub fn is_match(&self, hash: &[u8]) -> bool {
+        if hash.len() != 20 {
+            return false;
+        }
+
+        let hash_str = hex::encode_upper(hash);
+
+        let mut matched = true;
+        for (i, c) in self.pattern.chars().enumerate() {
+            if c.is_ascii_hexdigit() && c != hash_str.chars().nth(i).unwrap() {
+                matched = false;
+                break;
+            }
+        }
+
+        matched
+    }
 }
 
 impl FromStr for HashPattern {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let pattern = match s.trim().replace(" ", "").to_ascii_uppercase() {
+        let pattern = match s.trim().replace(' ', "").to_ascii_uppercase() {
             x if x.len() <= 40 => "*".repeat(40 - x.len()) + &x,
             _ => bail!("Invalid pattern: {}", s),
         };
+
         let mut parts: Vec<String> = vec![];
 
         // Handle fixed 0-9A-F
@@ -85,6 +107,7 @@ impl FromStr for HashPattern {
         };
 
         Ok(HashPattern {
+            pattern,
             filter,
             possibliity: (16f64).powi((fixed_pos_count + wildcard_pos_count) as i32),
         })

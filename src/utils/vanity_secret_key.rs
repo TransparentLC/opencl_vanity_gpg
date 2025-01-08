@@ -1,3 +1,4 @@
+use anyhow::Result;
 use byteorder::{BigEndian, ByteOrder};
 use log::{debug, info};
 use pgp::{
@@ -13,7 +14,7 @@ use smallvec::smallvec;
 
 use crate::ARGS;
 
-use super::CipherSuite;
+use super::{CipherSuite, HashPattern};
 
 /// Get the data used to calculate the fingerprint of a private key
 fn build_secret_key_hashdata(secret_key: impl SecretKeyTrait) -> Vec<u8> {
@@ -222,9 +223,24 @@ impl VanitySecretKey {
         }
     }
 
-    pub fn to_armored_string(&self) -> Result<String, pgp::errors::Error> {
-        self.secret_key
-            .to_armored_string(pgp::ArmorOptions::default())
+    pub fn to_armored_string(&self) -> Result<String> {
+        Ok(self
+            .secret_key
+            .to_armored_string(pgp::ArmorOptions::default())?)
+    }
+
+    pub fn check_pattern(&self, pattern: &HashPattern) -> bool {
+        if pattern.is_match(self.secret_key.fingerprint().as_bytes()) {
+            return true;
+        }
+
+        for subkey in &self.secret_key.secret_subkeys {
+            if pattern.is_match(subkey.fingerprint().as_bytes()) {
+                return true;
+            }
+        }
+
+        false
     }
 
     pub fn log_state(&self) {
