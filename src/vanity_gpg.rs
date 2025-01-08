@@ -1,34 +1,24 @@
+use byteorder::{BigEndian, ByteOrder};
 use clap::ValueEnum;
-use byteorder::{ByteOrder, BigEndian};
-use rand::{Rng, CryptoRng};
+use log::debug;
 use pgp::{
     composed::{key::SecretKeyParamsBuilder, KeyType},
-    crypto::{
-        hash::HashAlgorithm,
-        sym::SymmetricKeyAlgorithm,
-        ecc_curve::ECCCurve,
-    },
-    ser::Serialize,
+    crypto::{ecc_curve::ECCCurve, hash::HashAlgorithm, sym::SymmetricKeyAlgorithm},
     packet::KeyFlags,
-    types::{
-        CompressionAlgorithm,
-        PublicKeyTrait,
-        SecretKeyTrait,
-        KeyVersion,
-    },
-    Deserializable,
-    SecretKey,
-    SecretSubkey,
-    SignedSecretKey,
-    SubkeyParamsBuilder,
+    ser::Serialize,
+    types::{CompressionAlgorithm, KeyVersion, PublicKeyTrait, SecretKeyTrait},
+    Deserializable, SecretKey, SecretSubkey, SignedSecretKey, SubkeyParamsBuilder,
 };
+use rand::{CryptoRng, Rng};
 use smallvec::smallvec;
-use log::debug;
 
-/// 获取用于计算一个私钥的指纹的数据
+/// Get the data used to calculate the fingerprint of a private key
 fn build_secret_key_hashdata(secret_key: impl SecretKeyTrait) -> Vec<u8> {
     let mut hashdata = vec![0x99, 0, 0, 0x04, 0, 0, 0, 0];
-    BigEndian::write_u32(&mut hashdata[4..8], secret_key.created_at().timestamp() as u32);
+    BigEndian::write_u32(
+        &mut hashdata[4..8],
+        secret_key.created_at().timestamp() as u32,
+    );
     hashdata.push(secret_key.algorithm().into());
     secret_key.public_params().to_writer(&mut hashdata).unwrap();
     let packet_len = (hashdata.len() - 3) as u16;
@@ -36,7 +26,7 @@ fn build_secret_key_hashdata(secret_key: impl SecretKeyTrait) -> Vec<u8> {
     hashdata
 }
 
-/// 需要被修改的密钥类型
+/// Cipher Suites
 #[derive(ValueEnum, Default, Clone, Copy, Debug)]
 #[clap(rename_all = "kebab_case")]
 pub enum CipherSuite {
@@ -53,6 +43,7 @@ pub enum CipherSuite {
     EcdsaP384,
     EcdsaP521,
 }
+
 pub struct VanitySecretKey {
     pub cipher_suite: CipherSuite,
     pub secret_key: SignedSecretKey,
@@ -92,10 +83,13 @@ impl VanitySecretKey {
                 secret_key_params_builder
                     .key_type(KeyType::EdDSALegacy)
                     .subkey(subkey_params_builder.build().unwrap());
-            },
-                CipherSuite::EcdhP256 | CipherSuite::EcdsaP256 |
-                CipherSuite::EcdhP384 | CipherSuite::EcdsaP384 |
-                CipherSuite::EcdhP521 | CipherSuite::EcdsaP521 => {
+            }
+            CipherSuite::EcdhP256
+            | CipherSuite::EcdsaP256
+            | CipherSuite::EcdhP384
+            | CipherSuite::EcdsaP384
+            | CipherSuite::EcdhP521
+            | CipherSuite::EcdsaP521 => {
                 let curve = match cipher_suite {
                     CipherSuite::EcdhP256 | CipherSuite::EcdsaP256 => ECCCurve::P256,
                     CipherSuite::EcdhP384 | CipherSuite::EcdsaP384 => ECCCurve::P384,
@@ -109,7 +103,7 @@ impl VanitySecretKey {
                 secret_key_params_builder
                     .key_type(KeyType::ECDSA(curve.clone()))
                     .subkey(subkey_params_builder.build().unwrap());
-            },
+            }
             CipherSuite::RSA2048 | CipherSuite::RSA3072 | CipherSuite::RSA4096 => {
                 let bits = match cipher_suite {
                     CipherSuite::RSA2048 => 2048,
@@ -120,13 +114,15 @@ impl VanitySecretKey {
                 secret_key_params_builder
                     .key_type(KeyType::Rsa(bits))
                     .can_encrypt(true);
-            },
+            }
         }
 
         let secret_key_params = secret_key_params_builder.build().unwrap();
         let secret_key = secret_key_params
-            .generate(&mut rng).unwrap()
-            .sign(&mut rng, || String::new()).unwrap();
+            .generate(&mut rng)
+            .unwrap()
+            .sign(&mut rng, String::new)
+            .unwrap();
         assert_eq!(secret_key.version(), KeyVersion::V4);
 
         Self {
@@ -139,7 +135,7 @@ impl VanitySecretKey {
         // RFC 9580 - OpenPGP
         // 4. Packet Syntax
         // https://datatracker.ietf.org/doc/html/rfc9580#name-packet-syntax
-        let mut secret_key_bytes = Vec::from(self.secret_key.to_bytes().unwrap());
+        let mut secret_key_bytes = self.secret_key.to_bytes().unwrap();
         let mut packet_read_pos: usize = 0;
         while packet_read_pos < secret_key_bytes.len() {
             let cipher_type_byte = secret_key_bytes[packet_read_pos];
@@ -148,15 +144,33 @@ impl VanitySecretKey {
             let (size, size_length) = match cipher_type_byte >> 6 {
                 0b10 => match cipher_type_byte & 0b00000011 {
                     0 => (secret_key_bytes[packet_read_pos] as usize, 1),
-                    1 => (BigEndian::read_u16(&secret_key_bytes[packet_read_pos..packet_read_pos + 2]) as usize, 2),
-                    2 => (BigEndian::read_u32(&secret_key_bytes[packet_read_pos..packet_read_pos + 4]) as usize, 4),
+                    1 => (
+                        BigEndian::read_u16(&secret_key_bytes[packet_read_pos..packet_read_pos + 2])
+                            as usize,
+                        2,
+                    ),
+                    2 => (
+                        BigEndian::read_u32(&secret_key_bytes[packet_read_pos..packet_read_pos + 4])
+                            as usize,
+                        4,
+                    ),
                     3 => unimplemented!("Indeterminate length"),
                     _ => unreachable!(),
                 },
                 0b11 => match secret_key_bytes[packet_read_pos] {
                     x if x < 192 => (secret_key_bytes[packet_read_pos] as usize, 1),
-                    x if x < 224 => ((((secret_key_bytes[packet_read_pos] - 192) as usize) << 8) + (secret_key_bytes[packet_read_pos + 1] as usize) + 192, 2),
-                    x if x == 255 => (BigEndian::read_u32(&secret_key_bytes[packet_read_pos + 1..packet_read_pos + 5]) as usize, 5),
+                    x if x < 224 => (
+                        (((secret_key_bytes[packet_read_pos] - 192) as usize) << 8)
+                            + (secret_key_bytes[packet_read_pos + 1] as usize)
+                            + 192,
+                        2,
+                    ),
+                    255 => (
+                        BigEndian::read_u32(
+                            &secret_key_bytes[packet_read_pos + 1..packet_read_pos + 5],
+                        ) as usize,
+                        5,
+                    ),
                     _ => unimplemented!("Partial body length"),
                 },
                 _ => unreachable!(),
@@ -172,45 +186,59 @@ impl VanitySecretKey {
             // 0x05 => Secret-Key Packet
             // 0x07 => Secret-Subkey Packet
             if [0x05, 0x07].contains(&packet_type) {
-                BigEndian::write_u32(&mut secret_key_bytes[packet_read_pos + 1..packet_read_pos + 5], timestamp);
+                BigEndian::write_u32(
+                    &mut secret_key_bytes[packet_read_pos + 1..packet_read_pos + 5],
+                    timestamp,
+                );
             }
             packet_read_pos += size;
         }
-        // 只修改了时间，因此这个key的签名是无效的
+
+        // The signature of this key is invalid because only the timestamp is modified
         let edited_key = SignedSecretKey::from_bytes(&secret_key_bytes[..]).unwrap();
 
-        // 重新对key签名
+        // Re-sign the key
         let mut subkey_flags = KeyFlags::default();
         subkey_flags.set_encrypt_storage(true);
         subkey_flags.set_encrypt_comms(true);
         self.secret_key = SecretKey::new(
             edited_key.primary_key,
             edited_key.details.as_unsigned(),
-            edited_key.public_subkeys
+            edited_key
+                .public_subkeys
                 .iter()
                 .map(|e| e.as_unsigned())
                 .collect(),
-            edited_key.secret_subkeys
+            edited_key
+                .secret_subkeys
                 .iter()
                 .map(|e| SecretSubkey::new(e.key.clone(), subkey_flags))
                 .collect(),
-        ).sign(&mut rng, || String::new()).unwrap();
-        // self.secret_key.verify().unwrap();
+        )
+        .sign(&mut rng, String::new)
+        .unwrap();
     }
 
     pub fn hashdata(&self) -> Vec<u8> {
         match self.cipher_suite {
-            CipherSuite::Ed25519 |
-            CipherSuite::EcdsaP256 | CipherSuite::EcdsaP384 | CipherSuite::EcdsaP521 |
-            CipherSuite::RSA2048 | CipherSuite::RSA3072 | CipherSuite::RSA4096
-                => build_secret_key_hashdata(&self.secret_key),
-            CipherSuite::Cv25519 |
-            CipherSuite::EcdhP256 | CipherSuite::EcdhP384 | CipherSuite::EcdhP521
-                => build_secret_key_hashdata(&self.secret_key.secret_subkeys[0]),
+            CipherSuite::Ed25519
+            | CipherSuite::EcdsaP256
+            | CipherSuite::EcdsaP384
+            | CipherSuite::EcdsaP521
+            | CipherSuite::RSA2048
+            | CipherSuite::RSA3072
+            | CipherSuite::RSA4096 => build_secret_key_hashdata(&self.secret_key),
+            CipherSuite::Cv25519
+            | CipherSuite::EcdhP256
+            | CipherSuite::EcdhP384
+            | CipherSuite::EcdhP521 => {
+                build_secret_key_hashdata(&self.secret_key.secret_subkeys[0])
+            }
         }
     }
 
     pub fn to_armored_string(&self) -> Result<String, pgp::errors::Error> {
-        self.secret_key.to_armored_string(pgp::ArmorOptions::default())
+        self.secret_key
+            .to_armored_string(pgp::ArmorOptions::default())
     }
 }

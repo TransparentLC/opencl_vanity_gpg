@@ -1,21 +1,12 @@
 mod vanity_gpg;
 
-use vanity_gpg::{CipherSuite, VanitySecretKey};
 use clap::Parser;
-use std::{
-    fs,
-    io,
-    io::Write,
-    mem,
-    path::Path,
-    sync::mpsc::channel,
-    thread,
-    time::Instant,
-};
+use log::{debug, info, warn};
 use ocl::{Buffer, Device, Platform, ProQue};
-use rand::thread_rng;
 use pgp::types::PublicKeyTrait;
-use log::{warn, info, debug};
+use rand::thread_rng;
+use std::{fs, io, io::Write, mem, path::Path, sync::mpsc::channel, thread, time::Instant};
+use vanity_gpg::{CipherSuite, VanitySecretKey};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -44,9 +35,11 @@ struct Args {
 
     /// OpenCL kernel function for uint h[5] for matching fingerprints
     /// Ignore the pattern and no estimate is given if this has been set
-    /// Example:
-    /// * (h[4] & 0xFFFF)     == 0x1234     outputs a fingerprint ends with 1234
-    /// * (h[0] & 0xFFFF0000) == 0xABCD0000 outputs a fingerprint starts with ABCD
+    ///
+    ///   Example:
+    ///
+    ///     * (h[4] & 0xFFFF)     == 0x1234     outputs a fingerprint ends with 1234
+    ///     * (h[0] & 0xFFFF0000) == 0xABCD0000 outputs a fingerprint starts with ABCD
     #[arg(short, long, verbatim_doc_comment)]
     filter: Option<String>,
 
@@ -87,17 +80,19 @@ struct Args {
     device_list: bool,
 }
 
-/// 手动进行SHA-1的填充操作
-/// SHA-1的一个数据块是512 bit，因此输出的Vec<u32>长度是16的倍数
+/// Do SHA-1 padding manually
+/// A SHA-1 block is 512 bit, so the output Vec<u32> length is a multiple of 16
 fn manually_prepare_sha1(hashdata: Vec<u8>) -> Vec<u32> {
-    // 填充后的长度
-    // 用80 00 ...填充到448 mod 512 bit即56 mod 64 bytes，加上u64的8 bytes后长度是64的倍数
+    // Length after padding
+    // Fill with 0x80 0x00 ... to 448 mod 512 bit, which is 56 mod 64 bytes
+    // plus u64's 8 bytes, the length is a multiple of 64
     let padded_length = hashdata.len() + (64 - ((hashdata.len() + 8) % 64)) + 8;
     let mut result_u8 = Vec::with_capacity(padded_length);
     result_u8.extend_from_slice(&hashdata);
     result_u8.push(0x80);
     result_u8.resize(padded_length, 0);
-    // 需要把Vec<u8>直接转换成Vec<u32>
+
+    // convert Vec<u8> to Vec<u32>
     // https://stackoverflow.com/questions/49690459/converting-a-vecu32-to-vecu8-in-place-and-with-minimal-overhead
     let mut result_u32 = unsafe {
         let ptr = result_u8.as_mut_ptr() as *mut u32;
@@ -106,13 +101,15 @@ fn manually_prepare_sha1(hashdata: Vec<u8>) -> Vec<u32> {
         mem::forget(result_u8);
         Vec::from_raw_parts(ptr, length, capacity)
     };
+
     // assert_eq!(result_u32.len() % 16, 0);
-    // SHA-1的word和length使用大端序
-    for i in 0..result_u32.len() {
-        result_u32[i] = result_u32[i].to_be();
+    // SHA-1 uses big-endian words and length
+    for pos in &mut result_u32 {
+        *pos = pos.to_be();
     }
+
     let bit_length = hashdata.len() * 8;
-    result_u32[padded_length / 4 - 1] = (bit_length      ) as u32;
+    result_u32[padded_length / 4 - 1] = (bit_length) as u32;
     result_u32[padded_length / 4 - 2] = (bit_length >> 32) as u32;
     result_u32
 }
@@ -123,7 +120,8 @@ fn parse_pattern(pattern: String) -> (String, f64) {
         _ => panic!("Invalid pattern"),
     };
     let mut parts: Vec<String> = vec![];
-    // 处理0-9A-F
+
+    // Handle fixed 0-9A-F
     let mut fixed_pos_count: usize = 0;
     for i in 0..=4 {
         let mut mask = String::new();
@@ -145,8 +143,10 @@ fn parse_pattern(pattern: String) -> (String, f64) {
             parts.push(format!("(h[{i}] & 0x{mask}) == 0x{value}"));
         }
     }
-    // 处理通配符G-Z
-    let mut wildcard_pos_all: [Vec<usize>; (b'Z' - b'G' + 1) as usize] = std::default::Default::default();
+
+    // Handle wildcard G-Z
+    let mut wildcard_pos_all: [Vec<usize>; (b'Z' - b'G' + 1) as usize] =
+        std::default::Default::default();
     for (i, wildcard) in pattern.chars().enumerate() {
         if ('G'..='Z').contains(&wildcard) {
             wildcard_pos_all[((wildcard as u8) - b'G') as usize].push(i);
@@ -179,27 +179,38 @@ fn parse_pattern(pattern: String) -> (String, f64) {
             wildcard_pos_count += wildcard_pos.len() - 1;
         }
     }
-    let filter = if parts.len() != 0 {
+    let filter = if !parts.is_empty() {
         parts.join(" && ")
     } else {
         String::from("true")
     };
-    (filter, (16f64).powi((fixed_pos_count + wildcard_pos_count) as i32))
+    (
+        filter,
+        (16f64).powi((fixed_pos_count + wildcard_pos_count) as i32),
+    )
 }
 
 fn format_number(v: impl Into<f64>) -> String {
     match Into::<f64>::into(v) {
         // v if v >= 1e9f64 => { return format!("{:.02}g", v / 1e9f64); },
-        v if v >= 1e6f64 => { return format!("{:.02}m", v / 1e6f64); },
-        v if v >= 1e3f64 => { return format!("{:.02}k", v / 1e3f64); },
-        v => { return format!("{v:.02}"); },
+        v if v >= 1e6f64 => {
+            format!("{:.02}m", v / 1e6f64)
+        }
+        v if v >= 1e3f64 => {
+            format!("{:.02}k", v / 1e3f64)
+        }
+        v => {
+            format!("{v:.02}")
+        }
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::Builder::from_env(env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "info"))
-        .format_indent(None)
-        .init();
+    env_logger::Builder::from_env(
+        env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, "info"),
+    )
+    .format_indent(None)
+    .init();
 
     let args = if cfg!(debug_assertions) {
         Args {
@@ -222,40 +233,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     debug!("{:?}", &args);
 
-    let device_list: Vec<(Platform, Device)> = Platform::list()
-        .iter()
-        .rfold(
-            Vec::new(),
-            |mut list, platform| {
-                match Device::list_all(platform) {
-                    Ok(devices) => {
-                        let mut devices = devices
-                            .iter()
-                            .map(|device| (*platform, *device))
-                            .collect();
-                        list.append(&mut devices);
-                    },
-                    Err(_) => {},
+    let device_list: Vec<(Platform, Device)> =
+        Platform::list()
+            .iter()
+            .rfold(Vec::new(), |mut list, platform| {
+                if let Ok(devices) = Device::list_all(platform) {
+                    let mut devices = devices.iter().map(|device| (*platform, *device)).collect();
+                    list.append(&mut devices);
                 }
                 list
-            },
-        );
+            });
     if args.device_list {
         for (index, (platform, device)) in device_list.iter().enumerate() {
-            info!("Device #{} - {}", index, format!(
-                "{} ({}, MaxWorkGroupSize={}, MaxWorkItemSizes={}, MaxWorkItemDimensions={})",
-                device.name()?,
-                platform.name()?,
-                device.info(ocl::core::DeviceInfo::MaxWorkGroupSize)?,
-                device.info(ocl::core::DeviceInfo::MaxWorkItemSizes)?,
-                device.info(ocl::core::DeviceInfo::MaxWorkItemDimensions)?,
-            ));
+            info!(
+                "Device #{} - {}",
+                index,
+                format!(
+                    "{} ({}, MaxWorkGroupSize={}, MaxWorkItemSizes={}, MaxWorkItemDimensions={})",
+                    device.name()?,
+                    platform.name()?,
+                    device.info(ocl::core::DeviceInfo::MaxWorkGroupSize)?,
+                    device.info(ocl::core::DeviceInfo::MaxWorkItemSizes)?,
+                    device.info(ocl::core::DeviceInfo::MaxWorkItemDimensions)?,
+                )
+            );
         }
         return Ok(());
     }
 
     let device = match args.device {
-        Some(i) =>  device_list[i].1,
+        Some(i) => device_list[i].1,
         None => Device::first(Platform::default())?,
     };
     info!("Using device: {}", device.name()?);
@@ -274,10 +281,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(
         "You will get vanity keys created after {}",
         chrono::Utc::now()
-            .checked_sub_signed(chrono::TimeDelta::seconds((dimension * iteration) as i64)).unwrap()
+            .checked_sub_signed(chrono::TimeDelta::seconds((dimension * iteration) as i64))
+            .unwrap()
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
     );
-    if let None = args.output {
+    if args.output.is_none() {
         if args.no_secret_key_logging {
             warn!("No output dir given and you disabled secret key logging. You have no chance to save generated vanity keys.");
         } else {
@@ -291,7 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(pattern) => {
                 let (filter, estimate) = parse_pattern(pattern);
                 (filter, Some(estimate))
-            },
+            }
             None => panic!("No filter or pattern given"),
         },
     };
@@ -300,7 +308,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rng = thread_rng();
 
     match args.cipher_suite {
-        CipherSuite::RSA2048 | CipherSuite::RSA3072 | CipherSuite::RSA4096 => warn!("Generating RSA vanity keys is not recommended. Too slow!"),
+        CipherSuite::RSA2048 | CipherSuite::RSA3072 | CipherSuite::RSA4096 => {
+            warn!("Generating RSA vanity keys is not recommended. Too slow!")
+        }
         _ => (),
     };
 
@@ -308,13 +318,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut hashdata = manually_prepare_sha1(vanity_key.hashdata());
 
     let pro_que = ProQue::builder()
-        .src(std::include_str!("shader.cl").replace(
-            "#define __INJECTS__",
-            &[
-                format!("#define FILTER(h) ({filter})"),
-                format!("#define CHUNK ({})", hashdata.len() / 16),
-            ].join("\n"),
-        ))
+        .src(
+            std::include_str!("shader.cl").replace(
+                "#define __INJECTS__",
+                &[
+                    format!("#define FILTER(h) ({filter})"),
+                    format!("#define CHUNK ({})", hashdata.len() / 16),
+                ]
+                .join("\n"),
+            ),
+        )
         .device(device)
         .dims(dimension)
         .build()?;
@@ -341,21 +354,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .queue(pro_que.queue().clone())
                 .len(hashdata.len())
                 .copy_host_slice(&hashdata)
-                .build().unwrap();
+                .build()
+                .unwrap();
             let kernel = pro_que
                 .kernel_builder("vanity_sha1")
                 .arg(&buffer_hashdata)
                 .arg(&buffer_result)
                 .arg(iteration as u64)
-                .build().unwrap();
+                .build()
+                .unwrap();
 
-            unsafe { kernel.enq().unwrap(); }
+            unsafe {
+                kernel.enq().unwrap();
+            }
 
             buffer_result.read(&mut vec).enq().unwrap();
-            tx_result.send(match vec[0] {
-                0 => None,
-                x => Some(x),
-            }).unwrap();
+            tx_result
+                .send(match vec[0] {
+                    0 => None,
+                    x => Some(x),
+                })
+                .unwrap();
         }
         debug!("OpenCL thread quit");
     });
@@ -363,7 +382,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         debug!("Send key to OpenCL thread");
         tx_hashdata.send(hashdata)?;
-        let vanity_key_next = VanitySecretKey::new(args.cipher_suite, args.user_id.clone(), &mut rng);
+        let vanity_key_next =
+            VanitySecretKey::new(args.cipher_suite, args.user_id.clone(), &mut rng);
         let hashdata_next = manually_prepare_sha1(vanity_key_next.hashdata());
 
         debug!("Receive result from OpenCL thread");
@@ -376,8 +396,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(estimate) => print!(
                     "[{}] {}/{} {:.02}x {:.02}s {} hash/s \r",
                     match hashed_count % 16 {
-                        x if x < 8 => format!("{}>))'>{}", " ".repeat(     x), " ".repeat(7 - x)),
-                        x          => format!("{}<'((<{}", " ".repeat(15 - x), " ".repeat(x - 8)),
+                        x if x < 8 => format!("{}>))'>{}", " ".repeat(x), " ".repeat(7 - x)),
+                        x => format!("{}<'((<{}", " ".repeat(15 - x), " ".repeat(x - 8)),
                     },
                     format_number(hashed as f64),
                     format_number(estimate),
@@ -388,8 +408,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => print!(
                     "[{}] {} {:.02}s {} hash/s \r",
                     match hashed_count % 16 {
-                        x if x < 8 => format!("{}>))'>{}", " ".repeat(     x), " ".repeat(7 - x)),
-                        x          => format!("{}<'((<{}", " ".repeat(15 - x), " ".repeat(x - 8)),
+                        x if x < 8 => format!("{}>))'>{}", " ".repeat(x), " ".repeat(7 - x)),
+                        x => format!("{}<'((<{}", " ".repeat(15 - x), " ".repeat(x - 8)),
                     },
                     format_number(hashed as f64),
                     elapsed,
@@ -399,51 +419,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             io::stdout().flush()?;
         }
 
-        match vanity_timestamp {
-            Some(vanity_timestamp) => {
-                vanity_key.edit_timestamp(vanity_timestamp, &mut rng);
-                if args.no_secret_key_logging {
-                    info!("Get a vanity key!");
-                } else {
-                    info!("Get a vanity key: \n{}", vanity_key.to_armored_string()?);
-                }
+        if let Some(vanity_timestamp) = vanity_timestamp {
+            vanity_key.edit_timestamp(vanity_timestamp, &mut rng);
+            if args.no_secret_key_logging {
+                info!("Get a vanity key!");
+            } else {
+                info!("Get a vanity key: \n{}", vanity_key.to_armored_string()?);
+            }
+            info!(
+                "Created at: {} ({})",
+                vanity_key
+                    .secret_key
+                    .created_at()
+                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                vanity_key.secret_key.created_at().timestamp(),
+            );
+            info!(
+                "Fingerprint #0: {}",
+                hex::encode_upper(vanity_key.secret_key.fingerprint().as_bytes())
+            );
+            for (i, subkey) in vanity_key.secret_key.secret_subkeys.iter().enumerate() {
                 info!(
-                    "Created at: {} ({})",
-                    vanity_key.secret_key.created_at().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                    vanity_key.secret_key.created_at().timestamp(),
+                    "Fingerprint #{}: {}",
+                    i + 1,
+                    hex::encode_upper(subkey.fingerprint().as_bytes())
                 );
-                info!("Fingerprint #0: {}", hex::encode_upper(vanity_key.secret_key.fingerprint().as_bytes()));
-                for (i, subkey) in vanity_key.secret_key.secret_subkeys.iter().enumerate() {
-                    info!("Fingerprint #{}: {}", i + 1, hex::encode_upper(subkey.fingerprint().as_bytes()));
-                }
-                match estimate {
-                    Some(estimate) => info!(
-                        "Hashed: {} ({:.02}x) Time: {:.02}s Speed: {} hash/s",
-                        format_number(hashed as f64),
-                        (hashed as f64) / estimate,
-                        elapsed,
-                        format_number((hashed as f64) / elapsed),
-                    ),
-                    None => info!(
-                        "Hashed: {} Time: {:.02}s Speed: {} hash/s",
-                        format_number(hashed as f64),
-                        elapsed,
-                        format_number((hashed as f64) / elapsed),
-                    ),
-                }
-                if let Some(ref output_dir) = args.output {
-                    fs::write(
-                        Path::new(output_dir).join(format!("{}-sec.asc", hex::encode_upper(vanity_key.secret_key.fingerprint().as_bytes()))),
-                        vanity_key.to_armored_string()?,
-                    ).unwrap();
-                }
-                if args.oneshot {
-                    break;
-                }
-                hashed = 0;
-                start = Instant::now();
-            },
-            None => {},
+            }
+            match estimate {
+                Some(estimate) => info!(
+                    "Hashed: {} ({:.02}x) Time: {:.02}s Speed: {} hash/s",
+                    format_number(hashed as f64),
+                    (hashed as f64) / estimate,
+                    elapsed,
+                    format_number((hashed as f64) / elapsed),
+                ),
+                None => info!(
+                    "Hashed: {} Time: {:.02}s Speed: {} hash/s",
+                    format_number(hashed as f64),
+                    elapsed,
+                    format_number((hashed as f64) / elapsed),
+                ),
+            }
+            if let Some(ref output_dir) = args.output {
+                fs::write(
+                    Path::new(output_dir).join(format!(
+                        "{}-sec.asc",
+                        hex::encode_upper(vanity_key.secret_key.fingerprint().as_bytes())
+                    )),
+                    vanity_key.to_armored_string()?,
+                )
+                .unwrap();
+            }
+            if args.oneshot {
+                break;
+            }
+            hashed = 0;
+            start = Instant::now();
         }
         if let Some(timeout) = args.timeout {
             if elapsed > timeout {
