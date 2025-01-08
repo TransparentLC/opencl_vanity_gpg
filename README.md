@@ -19,7 +19,7 @@
 
 目前最好的同类工具是使用 CPU 的 [RedL0tus/VanityGPG](https://github.com/RedL0tus/VanityGPG) 和使用 GPU（CUDA）的 [cuihaoleo/gpg-fingerprint-filter-gpu](https://github.com/cuihaoleo/gpg-fingerprint-filter-gpu)。这个项目是使用 GPU（OpenCL）实现的，优点当然是开箱即用了。
 
-> TODO: GitHub Actions 自动编译
+GitHub Actions 有自动编译好的二进制文件。
 
 # 使用方法
 

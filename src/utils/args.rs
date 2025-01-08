@@ -84,7 +84,7 @@ pub struct Args {
 impl Default for Args {
     fn default() -> Self {
         Self {
-            cipher_suite: CipherSuite::RSA3072,
+            cipher_suite: CipherSuite::Ed25519,
             user_id: String::from("Dummy <dummy@example.com>"),
             pattern: Some(String::from("XXXYYYZZZWWW")),
             filter: None,

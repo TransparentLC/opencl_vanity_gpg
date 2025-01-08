@@ -1,0 +1,61 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+          # - macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Prepare OpenCL SDK
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            VERSION=$(gh release view --repo KhronosGroup/OpenCL-SDK --json tagName --jq .tagName)
+            gh release download --repo KhronosGroup/OpenCL-SDK --pattern "OpenCL-SDK-${VERSION}-Win-x64.zip"
+            unzip "OpenCL-SDK-${VERSION}-Win-x64.zip"
+            cp "OpenCL-SDK-${VERSION}-Win-x64/lib/OpenCL.lib" OpenCL.lib
+          fi
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt install opencl-headers ocl-icd-opencl-dev
+          fi
+          # FIXME
+          # if [[ "$RUNNER_OS" == "macOS" ]]; then
+          #
+          # fi
+      - name: Build
+        id: build
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export RUSTFLAGS="--remap-path-prefix C:\\Users\\runneradmin=~"
+          else
+            export RUSTFLAGS="--remap-path-prefix $HOME=~"
+          fi
+          cargo build --release
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            echo "executable=target/release/opencl_vanity_gpg.exe" >> $GITHUB_OUTPUT
+          else
+            echo "executable=target/release/opencl_vanity_gpg" >> $GITHUB_OUTPUT
+          fi
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencl_vanity_gpg-${{ runner.os }}
+          path: ${{ steps.build.outputs.executable }}
