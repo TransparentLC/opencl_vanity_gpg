@@ -1,6 +1,5 @@
 use byteorder::{BigEndian, ByteOrder};
-use clap::ValueEnum;
-use log::debug;
+use log::{debug, info};
 use pgp::{
     composed::{key::SecretKeyParamsBuilder, KeyType},
     crypto::{ecc_curve::ECCCurve, hash::HashAlgorithm, sym::SymmetricKeyAlgorithm},
@@ -11,6 +10,10 @@ use pgp::{
 };
 use rand::{CryptoRng, Rng};
 use smallvec::smallvec;
+
+use crate::ARGS;
+
+use super::CipherSuite;
 
 /// Get the data used to calculate the fingerprint of a private key
 fn build_secret_key_hashdata(secret_key: impl SecretKeyTrait) -> Vec<u8> {
@@ -24,24 +27,6 @@ fn build_secret_key_hashdata(secret_key: impl SecretKeyTrait) -> Vec<u8> {
     let packet_len = (hashdata.len() - 3) as u16;
     BigEndian::write_u16(&mut hashdata[1..3], packet_len);
     hashdata
-}
-
-/// Cipher Suites
-#[derive(ValueEnum, Default, Clone, Copy, Debug)]
-#[clap(rename_all = "kebab_case")]
-pub enum CipherSuite {
-    #[default]
-    Ed25519,
-    Cv25519,
-    RSA2048,
-    RSA3072,
-    RSA4096,
-    EcdhP256,
-    EcdhP384,
-    EcdhP521,
-    EcdsaP256,
-    EcdsaP384,
-    EcdsaP521,
 }
 
 pub struct VanitySecretKey {
@@ -240,5 +225,34 @@ impl VanitySecretKey {
     pub fn to_armored_string(&self) -> Result<String, pgp::errors::Error> {
         self.secret_key
             .to_armored_string(pgp::ArmorOptions::default())
+    }
+
+    pub fn log_state(&self) {
+        if ARGS.no_secret_key_logging {
+            info!("Get a vanity key!");
+        } else {
+            info!(
+                "Get a vanity key: \n{}",
+                self.to_armored_string().unwrap_or_default()
+            );
+        }
+        info!(
+            "Created at: {} ({})",
+            self.secret_key
+                .created_at()
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            self.secret_key.created_at().timestamp(),
+        );
+        info!(
+            "Fingerprint #0: {}",
+            hex::encode_upper(self.secret_key.fingerprint().as_bytes())
+        );
+        for (i, subkey) in self.secret_key.secret_subkeys.iter().enumerate() {
+            info!(
+                "Fingerprint #{}: {}",
+                i + 1,
+                hex::encode_upper(subkey.fingerprint().as_bytes())
+            );
+        }
     }
 }
