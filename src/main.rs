@@ -10,6 +10,7 @@ use std::{
     sync::{mpsc::*, LazyLock},
     thread,
     time::Instant,
+    usize,
 };
 use utils::ARGS;
 use utils::*;
@@ -167,7 +168,10 @@ fn main() -> anyhow::Result<()> {
 
     thread::spawn(move || opencl_thread(buffer_result, pro_que, rx_hashdata, tx_result));
 
-    let bench_size = (dimension * iteration) as u64;
+    let bench_size = std::cmp::min(
+        (dimension * iteration) as u64,
+        ARGS.max_time_range.map(|x| x as u64).unwrap_or(u64::MAX),
+    );
     let bar = bars.add(init_progress_bar(estimate));
 
     loop {

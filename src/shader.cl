@@ -19,8 +19,8 @@ __kernel void vanity_sha1(__constant uint *hashdata, __global uint *result, cons
         // Each thread gets a small sequential offset
         uint offset = thread_id + i * get_global_size(0);
 
-        // Wrap around within max_time_range to avoid going too far
-        if (max_time_range) offset %= max_time_range;
+        // Avoid going too far (within max_time_range)
+        if (max_time_range && offset > max_time_range) break;
 
         if (FUTURE_MODE) {
             // For future mode: increment timestamp within range
