@@ -11,17 +11,17 @@ __kernel void vanity_sha1(__constant uint *hashdata, __global uint *result, cons
     uint data[CHUNK * 16];
     for (uint i = 0; i < CHUNK * 16; i++) data[i] = hashdata[i];
     uint nonce = data[1];
-    
+
     uint thread_id = get_global_id(0);
-    
+
     for (uint i = 0; i < iter; i++) {
         // Use a simple sequential approach that searches close to base time first
         // Each thread gets a small sequential offset
         uint offset = thread_id + i * get_global_size(0);
-        
+
         // Wrap around within max_time_range to avoid going too far
-        offset = offset % max_time_range;
-        
+        if (max_time_range) offset %= max_time_range;
+
         if (FUTURE_MODE) {
             // For future mode: increment timestamp within range
             data[1] = nonce + offset;

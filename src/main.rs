@@ -58,25 +58,22 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| chrono::Utc::now().timestamp());
 
     // Use the user-specified time range instead of dimension * iteration
-    let max_search_offset = ARGS.max_time_range as i64;
-
-    if ARGS.future_timestamp {
-        info!(
-            "Starting search from {} and going forward in time (up to {} seconds)",
-            chrono::DateTime::from_timestamp(start_timestamp, 0)
-                .unwrap_or_else(chrono::Utc::now)
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            max_search_offset
-        );
-    } else {
-        info!(
-            "Starting search from {} and going backward in time (up to {} seconds)",
-            chrono::DateTime::from_timestamp(start_timestamp, 0)
-                .unwrap_or_else(chrono::Utc::now)
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            max_search_offset
-        );
-    }
+    info!(
+        "Starting search from {} and going {} in time{}",
+        chrono::DateTime::from_timestamp(start_timestamp, 0)
+            .unwrap_or_else(chrono::Utc::now)
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        if ARGS.future_timestamp {
+            "forward"
+        } else {
+            "backward"
+        },
+        if ARGS.max_time_range.is_some() {
+            format!(" (up to {} seconds)", ARGS.max_time_range.unwrap())
+        } else {
+            "".to_string()
+        },
+    );
 
     if ARGS.output.is_none() {
         if ARGS.no_secret_key_logging {
@@ -275,7 +272,7 @@ fn opencl_thread(
             .arg(&buffer_hashdata)
             .arg(&buffer_result)
             .arg(ARGS.iteration as u64)
-            .arg(ARGS.max_time_range as u32)
+            .arg(ARGS.max_time_range.unwrap_or(0))
             .build()
             .unwrap();
 

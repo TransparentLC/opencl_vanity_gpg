@@ -89,11 +89,11 @@ pub struct Args {
     #[arg(long, verbatim_doc_comment)]
     pub start_timestamp: Option<i64>,
 
-    /// Maximum time range to search in seconds (default: 86400000 = 1000 days)
-    /// future_timestamp=true: search from start_timestamp to (start_timestamp + max_time_range)
-    /// future_timestamp=false: search from (start_timestamp - max_time_range) to start_timestamp
-    #[arg(long, default_value_t = 86400000, verbatim_doc_comment)]
-    pub max_time_range: u64,
+    /// Maximum time range to search in seconds
+    /// future_timestamp =  true: search from start_timestamp to (start_timestamp + max_time_range)
+    /// future_timestamp = false: search from (start_timestamp - max_time_range) to start_timestamp
+    #[arg(long, verbatim_doc_comment)]
+    pub max_time_range: Option<u32>,
 }
 
 impl Default for Args {
@@ -114,7 +114,7 @@ impl Default for Args {
             list_device: false,
             future_timestamp: false,
             start_timestamp: None,
-            max_time_range: 86400000,
+            max_time_range: None,
         }
     }
 }
