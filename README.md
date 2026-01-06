@@ -78,7 +78,7 @@ Options:
           If not specified, uses current time as the starting point
           Example: 1640995200 (Jan 1, 2022 00:00:00 UTC)
       --max-time-range <MAX_TIME_RANGE>
-          Maximum time range to search in seconds (default: 86400000 = 1000 days)
+          Maximum time range to search in seconds
           future_timestamp=true: search from start_timestamp to (start_timestamp + max_time_range)
           future_timestamp=false: search from (start_timestamp - max_time_range) to start_timestamp [default: 86400000]
   -h, --help
