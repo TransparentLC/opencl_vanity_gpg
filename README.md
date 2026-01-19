@@ -21,6 +21,10 @@
 
 GitHub Actions 有自动编译好的二进制文件。
 
+> [!NOTE]
+>
+> 如果你生成了指纹以 `00000000` 结尾的私钥，由于 GnuPG 的一个 bug，它们将无法正常显示信任等级，但是仍然可以使用。相关讨论见 [Issue #5](https://github.com/TransparentLC/opencl_vanity_gpg/issues/5)。
+
 # 使用方法
 
 ```console
