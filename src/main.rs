@@ -217,14 +217,18 @@ fn main() -> anyhow::Result<()> {
                 }
 
                 if let Some(ref output_dir) = ARGS.output {
-                    fs::write(
-                        Path::new(output_dir).join(format!(
-                            "{}-sec.asc",
-                            hex::encode_upper(vanity_key.secret_key.fingerprint().as_bytes())
-                        )),
-                        vanity_key.to_armored_string()?,
-                    )
-                    .unwrap();
+                    let file_path = Path::new(output_dir).join(format!(
+                        "{}-sec.asc",
+                        hex::encode_upper(vanity_key.secret_key.fingerprint().as_bytes())
+                    ));
+                    
+                    // Create the directory if it doesn't exist
+                    if let Some(parent_dir) = file_path.parent() {
+                        info!("The target directory not found, created: {}", parent_dir.display());
+                        fs::create_dir_all(parent_dir).unwrap();
+                    }
+                    
+                    fs::write(&file_path, vanity_key.to_armored_string()?).unwrap();
                 }
 
                 if ARGS.oneshot {
