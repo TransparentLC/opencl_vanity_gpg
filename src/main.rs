@@ -84,6 +84,11 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    if let Some(ref output_dir) = ARGS.output {
+        warn!("Output directory does not exist, creating it: {output_dir}");
+        fs::create_dir_all(output_dir)?;
+    }
+
     let pattern = match &ARGS.pattern {
         Some(pattern) => Some(HashPattern::from_str(pattern)?),
         None => None,
@@ -223,8 +228,7 @@ fn main() -> anyhow::Result<()> {
                             hex::encode_upper(vanity_key.secret_key.fingerprint().as_bytes())
                         )),
                         vanity_key.to_armored_string()?,
-                    )
-                    .unwrap();
+                    )?;
                 }
 
                 if ARGS.oneshot {
